@@ -254,6 +254,14 @@ class FullFinetuneRecipeDistributed(FTRecipeInterface):
             self._steps_per_epoch = self.max_steps_per_epoch
         self.global_step = self.epochs_run * self._steps_per_epoch
 
+        # Learning rate scheduler can only be set up after number of steps
+        # has been computed
+        self._lr_scheduler = self._setup_lr_scheduler(
+            cfg_lr_scheduler=cfg.lr_scheduler,
+            num_training_steps=self.total_epochs * self._steps_per_epoch,
+            last_epoch=self.total_training_steps - 1,
+        )
+
     def _setup_model(
         self,
         cfg_model: DictConfig,
@@ -375,6 +383,22 @@ class FullFinetuneRecipeDistributed(FTRecipeInterface):
         if self._is_rank_zero:
             log.info("Optimizer is initialized.")
         return optimizer
+
+    def _setup_lr_scheduler(
+        self,
+        cfg_lr_scheduler: DictConfig,
+        num_training_steps: int,
+        last_epoch: int,
+    ) -> Optimizer:
+        lr_scheduler = config.instantiate(
+            cfg_lr_scheduler,
+            self._optimizer,
+            num_training_steps=num_training_steps,
+            last_epoch=last_epoch,
+        )
+        if self._is_rank_zero:
+            log.info("Learning rate scheduler is initialized.")
+        return lr_scheduler
 
     def _setup_data(
         self,
@@ -532,6 +556,7 @@ class FullFinetuneRecipeDistributed(FTRecipeInterface):
                 if (idx + 1) % self._gradient_accumulation_steps == 0:
                     self._optimizer.step()
                     self._optimizer.zero_grad(set_to_none=True)
+                    self._lr_scheduler.step()
 
                     # Update the number of steps when the weights are updated
                     self.global_step += 1
